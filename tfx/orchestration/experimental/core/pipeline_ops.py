@@ -779,7 +779,7 @@ def _orchestrate_update_initiated_pipeline(
         node_uid = task_lib.NodeUid.from_pipeline_node(pipeline, node)
         with pipeline_state.node_state_update_context(node_uid) as node_state:
           if node_state.is_startable():
-            node_state.update(pstate.NodeState.STARTED)
+            node_state.update(pstate.NodeState.STARTING)
 
       pipeline_state.apply_pipeline_update()
 
