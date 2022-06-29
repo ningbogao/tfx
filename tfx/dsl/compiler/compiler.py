@@ -15,7 +15,7 @@
 import collections
 import inspect
 import itertools
-from typing import Any, Dict, Iterator, Iterable, List, Optional, Set, Tuple, Type, cast
+from typing import Any, Dict, Iterator, Iterable, List, Optional, Set, Tuple, Type, cast, Mapping
 
 from tfx import types
 from tfx.dsl.compiler import compiler_utils
@@ -37,6 +37,7 @@ from tfx.proto.orchestration import executable_spec_pb2
 from tfx.proto.orchestration import pipeline_pb2
 from tfx.types import channel as tfx_channel
 from tfx.types import channel_utils
+from tfx.types import resolved_channel
 from tfx.types import value_artifact
 from tfx.utils import deprecation_utils
 from tfx.utils import json_utils
@@ -840,8 +841,28 @@ def _set_node_inputs(node: pipeline_pb2.PipelineNode,
                      tfx_node_inputs: Dict[str, types.Channel],
                      implicit_input_channels: Dict[str, types.Channel]):
   """Compiles the inputs for a pipeline node."""
-  for key, value in itertools.chain(tfx_node_inputs.items(),
-                                    implicit_input_channels.items()):
+  all_inputs = {**tfx_node_inputs, **implicit_input_channels}
+  resolved_channel_inputs = {}
+
+  for key, input_channel in all_inputs.items():
+    if isinstance(input_channel, resolved_channel.ResolvedChannel):
+      resolved_channel_inputs[key] = input_channel
+
+  if (len(resolved_channel_inputs) != len(all_inputs)
+      and resolved_channel_inputs):
+    bad_input_keys = list(set(all_inputs) - set(resolved_channel_inputs))
+    # This is the weird limitation we have using the ResolverConfig based IR.
+    # New InputGraph based IR can solve the problem.
+    raise ValueError(
+        f"Node {tfx_node.id} inputs should all be coming from the same input "
+        f"function output, while {bad_input_keys} are not.")
+
+  if resolved_channel_inputs:
+    _set_resolved_channel_inputs(
+        compile_context, tfx_node, resolved_channel_inputs, node)
+    return
+
+  for key, value in all_inputs.items():
     input_spec = node.inputs.inputs[key]
 
     if isinstance(value, tfx_channel.PipelineInputChannel):
@@ -915,6 +936,61 @@ def _set_node_inputs(node: pipeline_pb2.PipelineNode,
             raise
     else:
       input_spec.min_count = 0
+
+
+def _set_resolved_channel_inputs(
+    compile_context: _CompilerContext,
+    tfx_node: base_node.BaseNode,
+    inputs: Mapping[str, resolved_channel.ResolvedChannel],
+    node: pipeline_pb2.PipelineNode):
+  """Set `node.inputs` where all `inputs` are ResolvedChannel.
+
+  ResolvedChannel is a special BaseChannel that marks the output of the
+  ResolverFunction. If a node has ResolvedChannel input, all resolver function
+  definition should also be compiled as part of the node inputs.
+
+  Args:
+    compile_context: A _CompilerContext for the current pipeline.
+    tfx_node: A compiling node.
+    inputs: An input ResolvedChannels with keys.
+    node: A PipelineNode IR output.
+  """
+  for input_key, channel in inputs.items():
+    if channel.output_key != input_key:
+      # Resolved dict key should match the consumer input key. For example
+      #    inputs = resolve_inputs(...)
+      #    consumer_a = A(x=inputs['x'])  # valid
+      #    consumer_b = B(y=inputs['x'])  # INVALID
+      # This is the weird limitation we have using the ResolverConfig based IR.
+      # New InputGraph based IR can solve the problem.
+      raise ValueError(
+          f"Node {tfx_node.id}.inputs[{input_key!r}] should have the same key "
+          f"as the output key value but got {channel.output_key!r}.")
+  output_nodes = {channel.output_node for channel in inputs.values()}
+  if len(output_nodes) != 1:
+    # This is the weird limitation we have using the ResolverConfig based IR.
+    # New InputGraph based IR can solve the problem.
+    raise ValueError(
+        f"Node {tfx_node.id} should consume from single input function but "
+        f"detected {len(output_nodes)}.")
+  output_node = output_nodes.pop()
+  input_nodes = set(resolver_function.get_input_nodes(output_node))
+  if len(input_nodes) != 1:
+    # This is the weird limitation we have using the ResolverConfig based IR.
+    # New InputGraph based IR can solve the problem.
+    raise ValueError(
+        "Resolver function with multiple input nodes are not yet supported.")
+  input_node: resolver_op.InputNode = input_nodes.pop()
+  if any(isinstance(channel, resolved_channel.ResolvedChannel)
+         for channel in input_node.wrapped.values()):
+    # This is the weird limitation we have using the ResolverConfig based IR.
+    # New InputGraph based IR can solve the problem.
+    raise ValueError(
+        "Cannot use input function output as an input to another input "
+        "function.")
+  _set_node_inputs(node, tfx_node, compile_context, input_node.wrapped, {})
+  node.inputs.resolver_config.resolver_steps.extend(
+      _compile_trace_result(output_node))
 
 
 def _set_node_outputs(node: pipeline_pb2.PipelineNode,
