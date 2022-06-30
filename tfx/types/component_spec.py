@@ -246,9 +246,17 @@ class ComponentSpec(json_utils.Jsonable):
 
   @classmethod
   def is_optional_input(cls, key: str) -> bool:
-    """Whether the input channel of the key is optional."""
+    """Returns whether the input channel is optional."""
     try:
       return cast(ChannelParameter, cls.INPUTS[key]).optional
+    except KeyError as e:
+      raise KeyError(f'self.INPUTS = {cls.INPUTS}') from e
+
+  @classmethod
+  def is_input_channel_input_optional(cls, key: str) -> bool:
+    """Returns whether the input channel is input_optional."""
+    try:
+      return cast(ChannelParameter, cls.INPUTS[key]).input_optional
     except KeyError as e:
       raise KeyError(f'self.INPUTS = {cls.INPUTS}') from e
 
@@ -427,7 +435,24 @@ class ChannelParameter:
   def __init__(
       self,
       type: Optional[Type[artifact.Artifact]] = None,  # pylint: disable=redefined-builtin
-      optional: bool = False):
+      optional: bool = False,
+      input_optional: Optional[bool] = None):
+    """ChannelParameter constructor.
+
+    Note the distinction between `optional` and `input_optional`.
+
+    An illustrative example: a component may make it optional to provide a
+    specific channel C during pipeline definition time (i.e. set `optional` to
+    True). However, it may require that if the channel C is provided during
+    pipeline definition, during orchestration, the channel must have artifacts
+    before the component is triggered (i.e. set `input_optional` to False).
+
+    Args:
+      type: Artifact type of artifacts in this channel.
+      optional: Whether providing this channel is optional.
+      input_optional: Optional. Whether having inputs to this channel is
+        optional. Should only be explicitly set if `optional` is True.
+    """
     if not (inspect.isclass(type) and issubclass(type, artifact.Artifact)):  # pytype: disable=wrong-arg-types
       raise ValueError(
           'Argument "type" of Channel constructor must be a subclass of '
@@ -435,12 +460,22 @@ class ChannelParameter:
     self.type = type
     self.optional = optional
 
+    if input_optional is not None:
+      if not optional:
+        raise ValueError('input_optional should only be explictly set if '
+                         'optional is True')
+    self.input_optional = input_optional
+    if not optional:
+      # Input is always mandatory if channel is mandatory
+      self.input_optional = False
+
   def __repr__(self):
     return 'ChannelParameter(type: %s)' % self.type
 
   def __eq__(self, other):
     return (isinstance(other.__class__, self.__class__) and
-            other.type == self.type and other.optional == self.optional)
+            other.type == self.type and other.optional == self.optional and
+            other.input_optional == self.input_optional)
 
   def type_check(self, arg_name: str, value: channel.BaseChannel):
     if ((not isinstance(value, channel.BaseChannel)) or

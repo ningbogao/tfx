@@ -902,7 +902,19 @@ def _set_node_inputs(node: pipeline_pb2.PipelineNode,
         try:
           # Calculating min_count from ComponentSpec.INPUTS.
           if tfx_node.spec.is_optional_input(key):
-            input_spec.min_count = 0
+            if key not in tfx_node.spec.inputs:
+              # Channel optional in spec, and not provided to component.
+              input_spec.min_count = 0
+            else:
+              # Channel optional in spec, but provided to component.
+              if tfx_node.spec.is_input_channel_input_optional(key):
+                # Channel is defined as input_optional in spec. It's okay to
+                # trigger even if it has no resolved input artifacts.
+                input_spec.min_count = 0
+              else:
+                # Channel is defined as NOT input_optional in spec.
+                # It must have resolved input artifacts before it triggers.
+                input_spec.min_count = 1
           else:
             input_spec.min_count = 1
         except KeyError:
