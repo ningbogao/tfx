@@ -96,7 +96,9 @@ export TFX_DIR=~/tfx
 Next, install the dependencies required by the Chicago Taxi example:
 
 <pre class="devsite-terminal devsite-click-to-copy">
-pip install apache-airflow==1.10.9
+pip install apache-airflow==1.10.9 
+example :
+         pip install "apache-airflow==1.10.10" --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-1.10.10/constraints-3.6.txt"
 pip install -U tfx[examples]
 </pre>
 
